@@ -50,14 +50,18 @@ pub struct BasicAuthentication {
 /// Note that all previously pushed metrics with the same job and other grouping
 /// labels will be replaced with the metrics pushed by this call. (It uses HTTP
 /// method 'PUT' to push to the Pushgateway.)
+///
+/// You can pass a pre-built reqwest `client` to configure other underlying
+/// features, like adding a root certificate.
 pub fn push_metrics<S: BuildHasher>(
     job: &str,
     grouping: HashMap<String, String, S>,
     url: &str,
     mfs: Vec<proto::MetricFamily>,
+    client: Option<Client>,
     basic_auth: Option<BasicAuthentication>,
 ) -> Result<()> {
-    push(job, grouping, url, mfs, "PUT", basic_auth)
+    push(job, grouping, url, mfs, client, "PUT", basic_auth)
 }
 
 /// `push_add_metrics` works like `push_metrics`, but only previously pushed
@@ -69,8 +73,9 @@ pub fn push_add_metrics<S: BuildHasher>(
     url: &str,
     mfs: Vec<proto::MetricFamily>,
     basic_auth: Option<BasicAuthentication>,
+    client: Option<Client>,
 ) -> Result<()> {
-    push(job, grouping, url, mfs, "POST", basic_auth)
+    push(job, grouping, url, mfs, client, "POST", basic_auth)
 }
 
 const LABEL_NAME_JOB: &str = "job";
@@ -80,6 +85,7 @@ fn push<S: BuildHasher>(
     grouping: HashMap<String, String, S>,
     url: &str,
     mfs: Vec<proto::MetricFamily>,
+    client: Option<Client>,
     method: &str,
     basic_auth: Option<BasicAuthentication>,
 ) -> Result<()> {
@@ -146,7 +152,12 @@ fn push<S: BuildHasher>(
         let _ = encoder.encode(&[mf], &mut buf);
     }
 
-    let mut builder = HTTP_CLIENT
+    let mut client_ref: &Client = &HTTP_CLIENT;
+    if let Some(client) = &client {
+        client_ref = client;
+    }
+
+    let mut builder = client_ref
         .request(
             Method::from_str(method).unwrap(),
             Url::from_str(&push_url).unwrap(),
@@ -176,6 +187,7 @@ fn push_from_collector<S: BuildHasher>(
     grouping: HashMap<String, String, S>,
     url: &str,
     collectors: Vec<Box<dyn Collector>>,
+    client: Option<Client>,
     method: &str,
     basic_auth: Option<BasicAuthentication>,
 ) -> Result<()> {
@@ -185,19 +197,23 @@ fn push_from_collector<S: BuildHasher>(
     }
 
     let mfs = registry.gather();
-    push(job, grouping, url, mfs, method, basic_auth)
+    push(job, grouping, url, mfs, client, method, basic_auth)
 }
 
 /// `push_collector` push metrics collected from the provided collectors. It is
 /// a convenient way to push only a few metrics.
+///
+/// You can pass a pre-built reqwest `client` to configure other underlying
+/// features, like adding a root certificate.
 pub fn push_collector<S: BuildHasher>(
     job: &str,
     grouping: HashMap<String, String, S>,
     url: &str,
     collectors: Vec<Box<dyn Collector>>,
+    client: Option<Client>,
     basic_auth: Option<BasicAuthentication>,
 ) -> Result<()> {
-    push_from_collector(job, grouping, url, collectors, "PUT", basic_auth)
+    push_from_collector(job, grouping, url, collectors, client, "PUT", basic_auth)
 }
 
 /// `push_add_collector` works like `push_add_metrics`, it collects from the
@@ -207,9 +223,10 @@ pub fn push_add_collector<S: BuildHasher>(
     grouping: HashMap<String, String, S>,
     url: &str,
     collectors: Vec<Box<dyn Collector>>,
+    client: Option<Client>,
     basic_auth: Option<BasicAuthentication>,
 ) -> Result<()> {
-    push_from_collector(job, grouping, url, collectors, "POST", basic_auth)
+    push_from_collector(job, grouping, url, collectors, client, "POST", basic_auth)
 }
 
 const DEFAULT_GROUP_LABEL_PAIR: (&str, &str) = ("instance", "unknown");
@@ -278,7 +295,14 @@ mod tests {
             m.set_label(from_vec!(vec![l]));
             let mut mf = proto::MetricFamily::new();
             mf.set_metric(from_vec!(vec![m]));
-            let res = push_metrics("test", hostname_grouping_key(), "mockurl", vec![mf], None);
+            let res = push_metrics(
+                "test",
+                hostname_grouping_key(),
+                "mockurl",
+                vec![mf],
+                None,
+                None,
+            );
             assert!(format!("{}", res.unwrap_err()).contains(case.1));
         }
     }
